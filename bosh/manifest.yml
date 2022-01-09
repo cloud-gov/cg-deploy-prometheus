@@ -350,5 +350,5 @@ variables:
   type: password
 - name: oauth-proxy-cookie-secret
   type: password
-- name: oauth-proxy-oicd-issuer-url
+- name: oauth-proxy-oidc-issuer-url
   type: value
