@@ -258,14 +258,15 @@ instance_groups:
           threshold: 78
           evaluation_time: 10m
         job_persistent_disk_full:
-          threshold: 78
+          threshold: 85
           evaluation_time: 10m
         job_predict_persistent_disk_full:
-          threshold: 78
+          threshold: 85
           evaluation_time: 10m
         # set really high because this is never really actionable as-is
         job_high_cpu_load:
           threshold: 100
+          evaluation_time: 30m
   - name: bosh-dns-aliases
     release: bosh-dns-aliases
     properties:
