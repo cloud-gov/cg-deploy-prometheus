@@ -7,7 +7,4 @@ class Threshold:
     warn: int
     violation: int
     alert: bool
-
-@dataclass
-class AWS_User(Threshold):
-    user: str
+    user: str = ""

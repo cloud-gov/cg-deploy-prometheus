@@ -6,14 +6,11 @@ name = "pypi"
 [dev-packages]
 
 [packages]
-alembic = "*"
 boto3 = "*"
 environs="*"
 requests = "*"
-psycopg2-binary = "*"
 python-dateutil = "*"
 PyYAML = "*"
-sqlalchemy = "*"
 prometheus-client = "*"
 
 [requires]
