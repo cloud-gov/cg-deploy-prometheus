@@ -7,6 +7,7 @@ from datetime import timedelta, datetime
 from dateutil.parser import parse
 from environs import Env
 from pathlib import Path
+import re
 import sys
 import time
 import yaml
@@ -260,38 +261,21 @@ def search_for_keys(region_name: str, profile: dict, all_users: list[Threshold])
             check_user_thresholds(aws_user, row)
 
 
-def state_file_to_dict(all_outputs: list[dict]):
+def state_file_to_dict(all_outputs: dict):
     """ Convert the production state file to a dict
     data structure
-    {new_key = {key1:value, key2:value}}
-
-    NOTE: If anything changes with the outputs in aws-admin for gov and com
-    make sure the delimiter stays the same, or change the below var, set in config.yml, if it
-    changes just make sure that whatever it changes to is consistent with:
-    profile name prefix+delimiter+the rest of the string
-
-    example:
-
-    gov-stg-tool_access_key_id_stalekey -> prefix = gov-stg-tool, so the delimiter is '-'
-    the rest = tool_access_key_id_stalekey
+    {profile_key = {id:value, secret:value}}
     """
-    local_env = Env()
-    prefix_delimiter = local_env.str('PREFIX_DELIMITER')
     output_dict = {}
     for key, value in all_outputs.items():
-        profile = {}
-        new_dict = {}
-        new_key_comps = key.split(prefix_delimiter)
-        key_prefix = new_key_comps[0]
-        new_key = new_key_comps[len(new_key_comps)-2]
-        new_dict[new_key] = value
-        if key_prefix in output_dict:
-            # one exists, lets use it!
-            profile = output_dict[key_prefix]
-            profile[new_key] = value
-        else:
-            profile[new_key] = value
-            output_dict[key_prefix] = profile
+        new_key = re.sub("_.*","",key)
+        if new_key not in output_dict:
+                output_dict[new_key] = {}
+        if 'id' in key:
+            output_dict[new_key]['id'] = value
+        if 'secret' in key:
+            output_dict[new_key]['secret'] = value
+
     return output_dict
 
 
