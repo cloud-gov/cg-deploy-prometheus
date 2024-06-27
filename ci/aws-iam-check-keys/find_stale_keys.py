@@ -89,6 +89,7 @@ def main():
 
 
 def account_for_arn(arn):
+    # The format of an arn is:
     # arn:aws-us-gov:iam::account-here:user/cf-production/s3/cg-s3-some-guid-here
     arn_components = arn.split(':')
     account = ""
@@ -97,7 +98,7 @@ def account_for_arn(arn):
     return account.strip()
 
 
-def user_name_from_row(row: dict):
+def username_from_row(row: dict):
     account_num = account_for_arn(row['arn'])
     user = row['user']
     return f"{user}-{str(account_num)[-4:]}"
@@ -121,7 +122,7 @@ def check_retention(warn_days: int, violation_days: int, access_key_date: str) -
 
 def find_known_user(report_user: str, aws_users: list[Threshold]) -> (Threshold, list[dict]):
     """
-    Return the row as an AWS_User, from the users dictionary matching the report user if it exists and
+    Return the row as an Threshold, from the users dictionary matching the report user if it exists and
     not_found list if the user isn't found. This will be used for validating thresholds
     for the key rotation date timeframes as well as help track users not found
 
@@ -129,7 +130,6 @@ def find_known_user(report_user: str, aws_users: list[Threshold]) -> (Threshold,
     search will be looking for an exact match.
     """
     users_not_found = []
-    # aws_user:AWS_User = AWS_User(account_type="",is_wildcard=False,warn=0,violation=0,alert=False, user="")
     aws_user = None
     for an_aws_user in aws_users:
         if an_aws_user.is_wildcard:
@@ -146,16 +146,16 @@ def find_known_user(report_user: str, aws_users: list[Threshold]) -> (Threshold,
 
 
 def check_retention_for_key(access_key_last_rotated: str, access_key_num: int, user_row: dict,
-                            warn_days: int, violation_days: int, alert: bool):
+                            warn_days: int, violation_days: int):
     alert_type = ""
     warning_delta = None
     violation_delta = None
 
-    if alert and warn_days and violation_days and access_key_last_rotated != "N/A":
+    if warn_days and violation_days and access_key_last_rotated != "N/A":
         alert_type, warning_delta, violation_delta = check_retention(int(warn_days), int(violation_days),
                                                                      access_key_last_rotated)
         last_rotated = parse(access_key_last_rotated, ignoretz=True)
-        user_name = user_name_from_row(user_row)
+        user_name = username_from_row(user_row)
         alert = {'user': user_name, 'alert_type': alert_type, 'key': access_key_num, 'last_rotated': last_rotated,
                  'warn_date': warning_delta, 'violation_date': violation_delta}
         if alert_type and warning_delta and violation_delta:
@@ -190,11 +190,15 @@ def check_access_keys(user_row: dict, warn_days: int, violation_days: int, alert
     last_rotated_key1 = user_row['access_key_1_last_rotated']
     last_rotated_key2 = user_row['access_key_2_last_rotated']
 
-    check_retention_for_key(last_rotated_key1, 1, user_row, warn_days,
-                            violation_days, alert)
+    # note that if we decide to alert customers, we'll need to modify the threshold info
+    # setting alert to True for customers, which might make the alert boolean redundant
+    # as all other users are True right now
+    if alert:
+        check_retention_for_key(last_rotated_key1, 1, user_row, warn_days,
+                            violation_days)
 
-    check_retention_for_key(last_rotated_key2, 2, user_row, warn_days,
-                            violation_days, alert)
+        check_retention_for_key(last_rotated_key2, 2, user_row, warn_days,
+                            violation_days)
 
 
 def check_user_thresholds(aws_user: Threshold, report_row: dict):

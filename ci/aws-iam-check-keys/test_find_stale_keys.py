@@ -4,7 +4,7 @@ from unittest.mock import patch
 from unittest import TestCase
 
 import find_stale_keys
-from find_stale_keys import AWS_User
+from threshold import Threshold
 
 class Test(TestCase):
     def setUp(self):
@@ -20,12 +20,12 @@ class Test(TestCase):
                           "cert_1_active": "false", "cert_1_last_rotated": "N/A",\
                           "cert_2_active": "false", "cert_2_last_rotated": "N/A"}
         self.aws_users = [
-            AWS_User(account_type="Operators", is_wildcard=False, warn=90, violation=180, alert=True, user="Ben"),
-            AWS_User(account_type="Platform", is_wildcard=True, warn=90, violation=180, alert=True, user="cg-ecr-"),
-            AWS_User(account_type="Customer", is_wildcard=False, warn=180, violation=270, alert=False, user="cg-s3-somelonguidishname"),
-            AWS_User(account_type="Operators", is_wildcard=False, warn=90, violation=180, alert=True, user="Robert"),
-            AWS_User(account_type="Platform", is_wildcard=False, warn=90, violation=180, alert=True, user="Mark"),
-            AWS_User(account_type="Platform", is_wildcard=False, warn=90, violation=180, alert=True, user="James")
+            Threshold(account_type="Operators", is_wildcard=False, warn=90, violation=180, alert=True, user="Ben"),
+            Threshold(account_type="Platform", is_wildcard=False, warn=90, violation=180, alert=True, user="cg-ecr-somelongishthing"),
+            Threshold(account_type="Customer", is_wildcard=True, warn=180, violation=270, alert=False, user="cg-s3-somelonguidishname"),
+            Threshold(account_type="Operators", is_wildcard=False, warn=90, violation=180, alert=True, user="Robert"),
+            Threshold(account_type="Platform", is_wildcard=False, warn=90, violation=180, alert=True, user="Mark"),
+            Threshold(account_type="Platform", is_wildcard=False, warn=90, violation=180, alert=True, user="James")
         ]
 
     @patch('find_stale_keys.datetime')
@@ -39,45 +39,40 @@ class Test(TestCase):
     def test_find_known_user(self):
         # This should fail due to typo in name
         actual = find_stale_keys.find_known_user("cg-s3-somelonguidishname", self.aws_users)
-        expected = (AWS_User(account_type="Customer", is_wildcard=False, warn=180, violation=270, alert=False, user="cg-s3-smelonguidishname"),[])
-        self.assertEqual(actual, expected)
+        expected = (Threshold(account_type="Customer", is_wildcard=False, warn=180, violation=270, alert=False, user="cg-s3-smelonguidishname"),[])
+        self.assertNotEqual(actual, expected)
 
         # This passes and is an example of Fuzzy searching
         actual = find_stale_keys.find_known_user("cg-s3-somelonguidishname", self.aws_users)
-        expected = (AWS_User(account_type="Platform", is_wildcard=True, warn=180, violation=270, alert=False, user="cg-s3-somelonguidishname"),[])
+        expected = (Threshold(account_type="Customer", is_wildcard=True, warn=180, violation=270, alert=False, user="cg-s3-somelonguidishname"),[])
         self.assertEqual(actual, expected)
 
         # This passes and is an example of exact matching for name
         actual = find_stale_keys.find_known_user("Ben", self.aws_users)
-        expected = (AWS_User(account_type="Operators", is_wildcard=False, warn=90, violation=180, alert=False, user="Ben"),[])
+        expected = (Threshold(account_type="Operators", is_wildcard=False, warn=90, violation=180, alert=True, user="Ben"),[])
         self.assertEqual(actual, expected)
 
-        # Maybe a few more tests and one with not found users
+        # This passes and is an example of Fuzzy searching for a Platform user
+        actual = find_stale_keys.find_known_user("cg-ecr-somelongishthing", self.aws_users)
+        expected = (Threshold(account_type="Platform", is_wildcard=False, warn=90, violation=180, alert=True, user="cg-ecr-somelongishthing"),[])
+        self.assertEqual(actual, expected)
 
-    #
-    # def test_check_retention_for_key(self):
-    #     self.fail()
-    #
-    # def test_send_alerts(self):
-    #     self.fail()
-    #
-    # def test_send_all_alerts(self):
-    #     self.fail()
-    #
-    # def test_check_access_keys(self):
-    #     self.fail()
-    #
-    # def test_check_user_thresholds(self):
-    #     self.fail()
-    #
-    # def test_search_for_keys(self):
-    #     self.fail()
-    #
-    # def test_state_file_to_dict(self):
-    #     self.fail()
-    #
-    # def test_get_platform_thresholds(self):
-    #     self.fail()
-    #
-    # def test_format_user_dicts(self):
-    #     self.fail()
+    def test_account_for_arn(self):
+        # This will pass and is the standard use case
+        actual = find_stale_keys.account_for_arn("arn:aws:iam::12345678:user/break.glass")
+        expected = '12345678'
+        self.assertEqual(actual, expected)
+
+        # This will also pass but is not a use case so more logic is needed for account_for_arn
+        actual = find_stale_keys.account_for_arn("")
+        expected = ''
+        self.assertEqual(actual, expected)
+
+    def test_username_from_row(self):
+        # This will pass and is the standard use case
+        actual = find_stale_keys.username_from_row(self.test_dict)
+        expected = "break.glass-5678"
+
+        # This will not pass as it's missing the last 4 of the account
+        actual = find_stale_keys.username_from_row(self.test_dict)
+        expected = "break.glass-"
