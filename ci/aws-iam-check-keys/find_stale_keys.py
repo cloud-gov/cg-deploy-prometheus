@@ -1,9 +1,12 @@
 #!/usr/bin/env python
 
 import argparse
+import dataclasses
 from copy import copy
 import csv
 from datetime import timedelta, datetime
+from typing import Any
+
 from dateutil.parser import parse
 from environs import Env
 from pathlib import Path
@@ -15,6 +18,7 @@ import yaml
 import boto3
 from prometheus_client import CollectorRegistry, Gauge, pushadd_to_gateway
 
+from alert import Alert
 from threshold import Threshold
 
 VIOLATION = "violation"
@@ -26,8 +30,8 @@ cleared_alerts = []
 
 def main():
     """
-    Create tables if needed, load the thresholds for alerting and kick off the search for stale keys
-    If there is a migration to do, do that first!
+    This is where the loading of the various files for reference occurs. This also kicks off the process
+    to find the stale keys and then push any alerts out as well.
     """
 
     # grab the state files, user files and outputs from cg-provision from the
@@ -46,7 +50,6 @@ def main():
     parser.add_argument('-d', '--debug', action="store_true", help='debug mode no levels for now')
     args = parser.parse_args()
     if args.debug:
-        print("debug")
         debug = True
 
     # Debug code goes here
@@ -79,19 +82,22 @@ def main():
 
     for com_key in com_state_dict:
         all_com_users = com_users_list + tf_users + other_users
-        print(f"about to search using key: {com_key}")
+        # print(f"about to search com using key: {com_key}")
         search_for_keys(com_region, com_state_dict[com_key], all_com_users)
     for gov_key in gov_state_dict:
         all_gov_users = gov_users_list + tf_users + other_users
-        print(f"about to search using key: {gov_key}")
+        # print(f"about to search gov using key: {gov_key}")
         search_for_keys(gov_region, gov_state_dict[gov_key], all_gov_users)
     print(f'about to send {len(uncleared_alerts)} uncleared and {len(cleared_alerts)} cleared')
     send_data_via_client()
 
 
-def account_for_arn(arn):
-    # The format of an arn is:
-    # arn:aws-us-gov:iam::account-here:user/cf-production/s3/cg-s3-some-guid-here
+def account_for_arn(arn) -> str:
+    """
+     The format of an arn is:
+     arn:aws-us-gov:iam::account-here:user/cf-production/s3/cg-s3-some-guid-here
+     This pulls out the account number and returns it
+    """
     arn_components = arn.split(':')
     account = ""
     if len(arn_components) > 1:
@@ -99,80 +105,75 @@ def account_for_arn(arn):
     return account.strip()
 
 
-def username_from_row(row: dict):
+def username_from_row(row: dict) -> str:
+    """
+    Returns the user name in the format: user name-last four of the account number
+    """
     account_num = account_for_arn(row['arn'])
     user = row['user']
     return f"{user}-{str(account_num)[-4:]}"
 
 
-def check_retention(warn_days: int, violation_days: int, access_key_date: str) -> (str, datetime, datetime):
+def check_retention(warn_days: int, violation_days: int, access_key_date: str) -> Alert:
     """
-    Returns violation when keys were last rotated more than :violation_days: ago and
-    warning when keys were last rotated :warn_days: ago if it is neither None is returned
+    Returns an Alert dataclass with alert type violation when keys were last rotated
+    more than :violation_days: ago and alert type warning when keys were last rotated
+    :warn_days: ago if it is neither OK is returned for the alert_type
     """
     key_date = parse(access_key_date, ignoretz=True)
     violation_days_delta = key_date + timedelta(days=violation_days)
     warning_days_delta = key_date + timedelta(days=warn_days)
-    status = OK
+    alert_type = OK
     if violation_days_delta <= datetime.now():
-        status = VIOLATION
+        alert_type = VIOLATION
     if warning_days_delta <= datetime.now():
-        status = WARNING
-    return status, warning_days_delta, violation_days_delta
+        alert_type = WARNING
+    return Alert(alert_type=alert_type,
+                 warn_date=warning_days_delta,
+                 violation_date=violation_days_delta)
 
 
-def find_known_user(report_user: str, aws_users: list[Threshold]) -> (Threshold, list[dict]):
+def find_known_user(report_user: str, aws_users: list[Threshold]) -> Threshold:
     """
-    Return the row as an Threshold, from the users dictionary matching the report user if it exists and
-    not_found list if the user isn't found. This will be used for validating thresholds
-    for the key rotation date timeframes as well as help track users not found
-
-    Note that if is_wildcard is true, the search will be a fuzzy search otherwise the
-    search will be looking for an exact match.
+    Return the row as a Threshold, from the users dictionary matching the report user if it exists.
+    This will be used for validating thresholds for the key rotation date timeframes
     """
-    users_not_found = []
     aws_user = None
-    for an_aws_user in aws_users:
-        if an_aws_user.is_wildcard:
-            if an_aws_user.user in report_user:
-                aws_user = an_aws_user
-                break
-        else:
-            if an_aws_user.user == report_user:
-                aws_user = an_aws_user
-                break
-    if not aws_user:
-        users_not_found.append(report_user)
-    return aws_user, users_not_found
+    found = [aws_user for aws_user in aws_users if aws_user.user in report_user]
+    if found:
+        aws_user = copy(found[0])
+    return aws_user
 
 
-def check_retention_for_key(access_key_last_rotated: str, access_key_num: int, user_row: dict,
-                            warn_days: int, violation_days: int):
-    alert_type = ""
-    warning_delta = None
-    violation_delta = None
+def check_retention_for_key(access_key_last_rotated: str, access_key_num: int, aws_user: Threshold):
+    """
+    Given the last rotated date, which access key number and the threshold for the given user, check
+    to see if an alert is needed for either a warning, violation or both
+    """
+    alert = check_retention(int(aws_user.warn), int(aws_user.violation), access_key_last_rotated)
 
-    if warn_days and violation_days and access_key_last_rotated != "N/A":
-        alert_type, warning_delta, violation_delta = check_retention(int(warn_days), int(violation_days),
-                                                                     access_key_last_rotated)
-        last_rotated = parse(access_key_last_rotated, ignoretz=True)
-        user_name = username_from_row(user_row)
-        alert = {'user': user_name, 'alert_type': alert_type, 'key': access_key_num, 'last_rotated': last_rotated,
-                 'warn_date': warning_delta, 'violation_date': violation_delta}
-        if alert_type and warning_delta and violation_delta:
-            print(f'adding uncleared alert: {alert}')
-            uncleared_alerts.append(alert)
-        else:
-            print(f'adding cleared alert: {alert}')
-            cleared_alerts.append(alert)
+    alert.last_rotated = parse(access_key_last_rotated, ignoretz=True)
+    alert.key_num = access_key_num
+    alert.username = aws_user.user
+    alert_dict: dict[str, Any] = dataclasses.asdict(alert)
+
+    if alert.alert_type != OK:
+        # print(f'adding uncleared alert: {alert_dict}')
+        uncleared_alerts.append(alert_dict)
+    else:
+        # print(f'adding cleared alert: {alert_dict}')
+        cleared_alerts.append(alert_dict)
 
 
 def send_data_via_client():
+    """
+    Send uncleared and cleared alerts to Prometheus via the Pushgateway
+    """
     registry = CollectorRegistry()
     gateway = f'{env.str("GATEWAY_HOST")}:{env.str("GATEWAY_PORT","9091")}'
 
     key_info = Gauge("stale_key_num", "Stale key needs to be rotated (1) or not (0)",
-                     ['user', 'alert_type', 'key', 'last_rotated', 'warn_date', 'violation_date'],
+                     ['username', 'alert_type', 'key_num', 'last_rotated', 'warn_date', 'violation_date'],
                      registry=registry)
     for uncleared_alert in uncleared_alerts:
         key_info.labels(**uncleared_alert).set(1)
@@ -183,7 +184,7 @@ def send_data_via_client():
         pushadd_to_gateway(gateway,  job='find_stale_keys', registry=registry)
 
 
-def check_access_keys(user_row: dict, warn_days: int, violation_days: int, alert: bool):
+def check_access_keys(user_row: dict, aws_user: Threshold):
     """
     Validate key staleness for both access keys, provided they exist, for a
     given user
@@ -192,38 +193,38 @@ def check_access_keys(user_row: dict, warn_days: int, violation_days: int, alert
     last_rotated_key2 = user_row['access_key_2_last_rotated']
 
     # note that if we decide to alert customers, we'll need to modify the threshold info
-    # setting alert to True for customers, which might make the alert boolean redundant
-    # as all other users are True right now
-    if alert:
-        check_retention_for_key(last_rotated_key1, 1, user_row, warn_days,
-                            violation_days)
+    # setting alert to True for customers
+    if aws_user.alert:
+        aws_user.user = username_from_row(user_row)
 
-        check_retention_for_key(last_rotated_key2, 2, user_row, warn_days,
-                            violation_days)
+        if last_rotated_key1 != "N/A":
+            check_retention_for_key(last_rotated_key1, 1, aws_user)
+
+        if last_rotated_key2 != "N/A":
+            check_retention_for_key(last_rotated_key2, 2, aws_user)
 
 
 def check_user_thresholds(aws_user: Threshold, report_row: dict):
     """
-    Grab the thresholds from the user_thresholds and pass them on with the row
+    Grab the thresholds and pass them on with the row
     from the credentials report to be used for checking the keys
     """
     warn_days = aws_user.warn
     violation_days = aws_user.violation
-    alert = aws_user.alert
     local_env = Env()
 
     if warn_days == 0 or violation_days == 0:
-        default_warn_days = local_env.int("WARN_DAYS", 60)
-        warn_days = default_warn_days
-        default_violation_days = local_env.int("VIOLATION_DAYS", 90)
-        violation_days = default_violation_days
-    check_access_keys(report_row, warn_days, violation_days, alert)
+        aws_user.warn = local_env.int("WARN_DAYS", 60)
+        aws_user.violation = local_env.int("VIOLATION_DAYS", 90)
+    check_access_keys(report_row, aws_user)
 
 
 def search_for_keys(region_name: str, profile: dict, all_users: list[Threshold]):
     """
     The main search function that reaches out to AWS IAM to grab the
-    credentials report and read in csv.
+    credentials report as csv and load it into a list of dictionaries.
+    This list is then used to determine if a user has stale keys or not based on
+    the last rotation date for each of the access keys.
     """
 
     # First let's get a session based on the user access key,
@@ -232,7 +233,6 @@ def search_for_keys(region_name: str, profile: dict, all_users: list[Threshold])
                             aws_access_key_id=profile['id'],
                             aws_secret_access_key=profile['secret'])
     iam = session.client('iam')
-
     # Generate credential report for the given profile
     # Generating the report is an async operation, so wait for it by sleeping
     # If Python has async await type of construct it would be good to use here
@@ -254,8 +254,9 @@ def search_for_keys(region_name: str, profile: dict, all_users: list[Threshold])
 
         # Note: second return value in tuple below is ignored for now
         # When we want to do something with unknown users we can hook it up here
-        aws_user, _ = find_known_user(user_name, all_users)
+        aws_user = find_known_user(user_name, all_users)
         if not aws_user:
+            print(f"about to add {user_name} to not_found list")
             not_found.append(user_name)
         else:
             check_user_thresholds(aws_user, row)
@@ -268,9 +269,9 @@ def state_file_to_dict(all_outputs: dict):
     """
     output_dict = {}
     for key, value in all_outputs.items():
-        new_key = re.sub("_.*","",key)
+        new_key = re.sub("_.*", "", key)
         if new_key not in output_dict:
-                output_dict[new_key] = {}
+            output_dict[new_key] = {}
         if 'id' in key:
             output_dict[new_key]['id'] = value
         if 'secret' in key:
@@ -354,8 +355,7 @@ def load_other_users(other_users_filename: Path) -> list[Threshold]:
         violation: violation
     }
     Note that all values are hardcoded in the yaml
-    AWS_User is a subclass of the threshold dataclass which has the properties
-    in the above schema
+    Threshold is a dataclass which has the properties in the above schema
     """
     with open(other_users_filename) as f:
         other_users_yaml = yaml.safe_load(f)

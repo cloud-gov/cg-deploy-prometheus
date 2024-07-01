@@ -3,8 +3,10 @@ from datetime import datetime
 from unittest.mock import patch
 from unittest import TestCase
 
+from alert import Alert
 import find_stale_keys
 from threshold import Threshold
+
 
 class Test(TestCase):
     def setUp(self):
@@ -33,28 +35,28 @@ class Test(TestCase):
         mock_date = datetime(2024,4,25)
         mock_datetime.now.return_value = mock_date
         actual = find_stale_keys.check_retention(90, 180, "2024-04-12T21:23:58+00:00")
-        expected = (find_stale_keys.OK, datetime(2024,7,11,21,23,58), datetime(2024,10,9,21, 23,58))
+        expected = Alert(find_stale_keys.OK, datetime(2024,7,11,21,23,58), datetime(2024,10,9,21, 23,58))
         self.assertEqual(actual, expected)
 
     def test_find_known_user(self):
         # This should fail due to typo in name
         actual = find_stale_keys.find_known_user("cg-s3-somelonguidishname", self.aws_users)
-        expected = (Threshold(account_type="Customer", is_wildcard=False, warn=180, violation=270, alert=False, user="cg-s3-smelonguidishname"),[])
+        expected = Threshold(account_type="Customer", is_wildcard=False, warn=180, violation=270, alert=False, user="cg-s3-smelonguidishname")
         self.assertNotEqual(actual, expected)
 
-        # This passes and is an example of Fuzzy searching
+        # This passes due to expected being the same as actual
         actual = find_stale_keys.find_known_user("cg-s3-somelonguidishname", self.aws_users)
-        expected = (Threshold(account_type="Customer", is_wildcard=True, warn=180, violation=270, alert=False, user="cg-s3-somelonguidishname"),[])
+        expected = Threshold(account_type="Customer", is_wildcard=True, warn=180, violation=270, alert=False, user="cg-s3-somelonguidishname")
         self.assertEqual(actual, expected)
 
         # This passes and is an example of exact matching for name
         actual = find_stale_keys.find_known_user("Ben", self.aws_users)
-        expected = (Threshold(account_type="Operators", is_wildcard=False, warn=90, violation=180, alert=True, user="Ben"),[])
+        expected = Threshold(account_type="Operators", is_wildcard=False, warn=90, violation=180, alert=True, user="Ben")
         self.assertEqual(actual, expected)
 
         # This passes and is an example of Fuzzy searching for a Platform user
         actual = find_stale_keys.find_known_user("cg-ecr-somelongishthing", self.aws_users)
-        expected = (Threshold(account_type="Platform", is_wildcard=False, warn=90, violation=180, alert=True, user="cg-ecr-somelongishthing"),[])
+        expected = Threshold(account_type="Platform", is_wildcard=False, warn=90, violation=180, alert=True, user="cg-ecr-somelongishthing")
         self.assertEqual(actual, expected)
 
     def test_account_for_arn(self):
