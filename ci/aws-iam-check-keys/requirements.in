@@ -1,0 +1,6 @@
+boto3
+environs
+requests
+python-dateutil
+PyYAML
+prometheus-client
