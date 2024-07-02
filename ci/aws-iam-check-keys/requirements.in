@@ -1,4 +1,5 @@
 boto3
+dataclasses
 environs
 requests
 python-dateutil
