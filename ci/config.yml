@@ -8,8 +8,8 @@ prometheus-release-git-url: https://github.com/bosh-prometheus/prometheus-boshre
 pipeline-tasks-git-branch: main
 pipeline-tasks-git-url: https://github.com/cloud-gov/cg-pipeline-tasks.git
 
-slack-channel-success: '#cg-platform-news'
-slack-news-channel: '#cg-platform-news'
+slack-channel-success: "#cg-platform-news"
+slack-news-channel: "#cg-platform-news"
 slack-icon-url: https://avatars1.githubusercontent.com/u/7809479?v=3&s=40
 
-aws-iam-prefix-delimiter: '_'
+aws-iam-prefix-delimiter: "_"
