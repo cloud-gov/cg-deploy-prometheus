@@ -1,668 +1,755 @@
 ---
 groups:
-- name: deployment
-  jobs:
-  - set-self
-  - deploy-prometheus-staging
-  - deploy-prometheus-production
-- name: checks
-  jobs:
-  - set-self
-  - awslogs-check
-  - aws-mfa-check
-  - aws-rds-storage-check
-  - aws-iam-check-keys
-  - cdn-broker-certs
-  - domain-broker-certs
-  - concourse-has-auth-check
-  - prometheus-down-check-staging
-  - prometheus-down-check-production
+  - name: deployment
+    jobs:
+      - set-self
+      - deploy-prometheus-staging
+      - deploy-prometheus-production
+  - name: checks
+    jobs:
+      - set-self
+      - awslogs-check
+      - aws-mfa-check
+      - aws-rds-storage-check
+      - aws-iam-check-keys
+      - cdn-broker-certs
+      - domain-broker-certs
+      - concourse-has-auth-check
+      - prometheus-down-check-staging
+      - prometheus-down-check-production
 
 jobs:
-- name: set-self
-  plan:
-    - get: prometheus-config
-      trigger: true
-    - set_pipeline: self
-      file: prometheus-config/ci/pipeline.yml
-      var_files:
-        - prometheus-config/ci/config.yml
+  - name: set-self
+    plan:
+      - get: prometheus-config
+        trigger: true
+      - set_pipeline: self
+        file: prometheus-config/ci/pipeline.yml
+        var_files:
+          - prometheus-config/ci/config.yml
 
-- name: awslogs-check
-  serial_groups: [production]
-  plan:
-  - in_parallel:
-    - get: prometheus-check-timer
-      trigger: true
-    - get: prometheus-config
-      passed: [set-self]
-  - task: awslogs
-    file: prometheus-config/ci/awslogs.yml
-    tags: [iaas]
-    params:
-      AWS_DEFAULT_REGION: ((aws-region))
-      GATEWAY_HOST: prometheus-production.service.cf.internal
-      HEARTBEAT_GROUP: /var/log/syslog
-  on_success:
-    put: slack
-    params: &slack-success-params
-      text: |
-        :white_check_mark: Successfully checked whether EC2 instances are shipping logs to CloudWatch
-        <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
-      channel: ((slack-channel-success))
-      username: ((slack-username))
-      icon_url: ((slack-icon-url))
-  on_failure:
-    put: slack
-    params: &slack-failure-params
-      text: |
-        :x: FAILED to check whether EC2 instances are shipping logs to CloudWatch
-        <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
-      channel: ((slack-channel-failure))
-      username: ((slack-username))
-      icon_url: ((slack-icon-url))
-
-- name: aws-rds-storage-check
-  serial_groups: [production]
-  plan:
-  - in_parallel:
-    - get: prometheus-check-timer
-      trigger: true
-    - get: prometheus-config
-      passed: [set-self]
-  - task: aws-rds-storage-check
-    file: prometheus-config/ci/aws-rds-storage.yml
-    params:
-      AWS_DEFAULT_REGION: ((aws-region))
-      AWS_ACCESS_KEY_ID: ((aws-rds-access-key-id))
-      AWS_SECRET_ACCESS_KEY: ((aws-rds-secret-access-key))
-      GATEWAY_HOST: http://prometheus-production.service.cf.internal
-  on_success:
-    put: slack
-    params:
-      <<: *slack-success-params
-      text: |
-        :white_check_mark: Successfully checked remaining storage on AWS RDS instances
-        <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
-  on_failure:
-    put: slack
-    params:
-      <<: *slack-failure-params
-      text: |
-        :x: FAILED to check remaining storage on AWS RDS instances
-        <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
-
-- name: aws-iam-check-keys
-  serial_groups: [production]
-  plan:
-  - in_parallel:
-    - get: iam-keys-check-timer
-      trigger: true
-    - get: prometheus-config
-      passed: [set-self]
-    - get: aws-admin
-      trigger: false
-    - get: terraform-yaml-production
-      trigger: false
-    - get: terraform-prod-com-yml
-      resource: terraform-prod-com-yml
-      trigger: false
-    - get: terraform-prod-gov-yml
-      resource: terraform-prod-gov-yml
-      trigger: false
-    - get: other-iam-users-yml
-      resource: other-iam-users-yml
-      trigger: false
-  - task: aws-iam-check-keys
-    file: prometheus-config/ci/aws-iam-check-keys.yml
-    tags: [iaas]
-    params:
-      AWS_DEFAULT_REGION: ((aws-region))
-      IAM_KEYS_DB: ((aws-iam-keys-db))
-      IAM_KEYS_USER: ((aws-iam-keys-user))
-      IAM_KEYS_PASSWORD: ((aws-iam-keys-password))
-      IAM_KEYS_HOST: ((aws-iam-keys-host))
-      IAM_KEYS_PORT: ((aws-iam-keys-port))
-      IAM_CREATE_TABLES: ((aws-iam-create-tables-bool))
-      GATEWAY_HOST: prometheus-production.service.cf.internal
-      PREFIX_DELIMITER: ((aws-iam-prefix-delimiter))
-      WARN_DAYS: ((aws-iam-warn-days))
-      VIOLATION_DAYS: ((aws-iam-violation-days))
-  on_success:
-    put: slack
-    params:
-      <<: *slack-success-params
-      text: |
-        :white_check_mark: Successfully ran IAM Check Keys in production
-        <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
-  on_failure:
-    put: slack
-    params:
-      <<: *slack-failure-params
-      text: |
-        :x: FAILED to deploy IAM Check Keys on production
-        <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
-
-- name: aws-mfa-check
-  serial_groups: [production]
-  plan:
-  - in_parallel:
-    - get: prometheus-check-timer
-      trigger: true
-    - get: prometheus-config
-      passed: [set-self]
-  - task: aws-mfa
-    file: prometheus-config/ci/aws-mfa.yml
-    tags: [iaas]
-    params:
-      AWS_DEFAULT_REGION: ((aws-region))
-      GATEWAY_HOST: prometheus-production.service.cf.internal
-      VIOLATION_DAYS: ((aws-iam-violation-days))
-  on_success:
-    put: slack
-    params:
-      <<: *slack-success-params
-      text: |
-        :white_check_mark: Successfully ran AWS MFA check
-        <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
-  on_failure:
-    put: slack
-    params:
-      <<: *slack-failure-params
-      text: |
-        :x: FAILED to run AWS MFA check
-        <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
-
-- name: cdn-broker-certs
-  serial_groups: [production]
-  plan:
-  - in_parallel:
-    - get: prometheus-check-timer
-      trigger: true
-    - get: prometheus-config
-      passed: [set-self]
-  - in_parallel:
-    - task: cdn-broker-certs-production
-      file: prometheus-config/ci/cdn-broker-certs.yml
-      params:
-        AWS_DEFAULT_REGION: ((aws-external-region))
-        AWS_ACCESS_KEY_ID: ((aws-external-access-key-id))
-        AWS_SECRET_ACCESS_KEY: ((aws-external-secret-access-key))
-        ENVIRONMENT: production
-        GATEWAY_HOST: prometheus-production.service.cf.internal
-  on_success:
-    put: slack
-    params:
-      <<: *slack-success-params
-      text: |
-        :white_check_mark: Successfully updated Prometheus with metrics for CDN broker certificates
-        <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
-  on_failure:
-    put: slack
-    params:
-      <<: *slack-failure-params
-      text: |
-        :x: FAILED to update Prometheus with metrics for CDN broker certificates
-        <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
-
-- name: domain-broker-certs
-  serial_groups: [production]
-  plan:
-  - in_parallel:
-    - get: prometheus-check-timer
-      trigger: true
-    - get: prometheus-config
-      passed: [set-self]
-  - in_parallel:
-    - task: domain-broker-certs-development
-      file: prometheus-config/ci/domain-broker-certs.yml
-      tags: [iaas]
-      params:
-        PREFIX: development-domains
-        ENVIRONMENT: development
-        GATEWAY_HOST: prometheus-production.service.cf.internal
-        AWS_DEFAULT_REGION: ((aws-region))
-    - task: domain-broker-certs-staging
-      file: prometheus-config/ci/domain-broker-certs.yml
-      tags: [iaas]
-      params:
-        PREFIX: staging-domains
-        ENVIRONMENT: staging
-        GATEWAY_HOST: prometheus-production.service.cf.internal
-        AWS_DEFAULT_REGION: ((aws-region))
-    - task: domain-broker-certs-production
-      file: prometheus-config/ci/domain-broker-certs.yml
-      tags: [iaas]
-      params:
-        PREFIX: production-domains
-        ENVIRONMENT: production
-        GATEWAY_HOST: prometheus-production.service.cf.internal
-        AWS_DEFAULT_REGION: ((aws-region))
-  on_success:
-    put: slack
-    params:
-      <<: *slack-success-params
-      text: |
-        :white_check_mark: Successfully updated Prometheus with metrics for domain-broker certificates
-        <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
-  on_failure:
-    put: slack
-    params:
-      <<: *slack-failure-params
-      text: |
-        :x: FAILED to update Prometheus with metrics for domain-broker certificates
-        <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
-
-- name: concourse-has-auth-check
-  serial_groups: [production]
-  plan:
-  - in_parallel:
-    - get: prometheus-check-timer
-      trigger: true
-    - get: prometheus-config
-      passed: [set-self]
-  - task: concourse-has-auth
-    file: prometheus-config/ci/concourse-has-auth.yml
-    params:
-      CONCOURSE_URIS: "https://ci.fr-stage.cloud.gov https://ci.fr.cloud.gov"
-      GATEWAY_HOST: prometheus-production.service.cf.internal
-  on_success:
-    put: slack
-    params:
-      <<: *slack-success-params
-      text: |
-        :white_check_mark: Successfully updated Prometheus with metrics about Concourse auth
-        <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
-  on_failure:
-    put: slack
-    params:
-      <<: *slack-failure-params
-      text: |
-        :x: FAILED to update Prometheus with metrics about Concourse auth
-        <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
-
-- name: prometheus-down-check-production
-  serial_groups: [production]
-  plan:
-  - in_parallel:
-    - get: prometheus-check-timer
-      trigger: true
-    - get: prometheus-config
-      passed: [set-self]
-  - task: prometheus-down
-    file: prometheus-config/ci/prometheus-down.yml
-    params:
-      PROMETHEUSHOST: prometheus-production.service.cf.internal
-      ALERTMANAGERHOST: alertmanager-production.service.cf.internal
+  - name: awslogs-check
+    serial_groups: [production]
+    plan:
+      - in_parallel:
+          - get: prometheus-check-timer
+            trigger: true
+          - get: prometheus-config
+            passed: [set-self]
+          - get: general-task
+      - task: awslogs
+        image: general-task
+        file: prometheus-config/ci/awslogs.yml
+        tags: [iaas]
+        params:
+          AWS_DEFAULT_REGION: ((aws-region))
+          GATEWAY_HOST: prometheus-production.service.cf.internal
+          HEARTBEAT_GROUP: /var/log/syslog
+    on_success:
+      put: slack
+      params: &slack-success-params
+        text: |
+          :white_check_mark: Successfully checked whether EC2 instances are shipping logs to CloudWatch
+          <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
+        channel: ((slack-channel-success))
+        username: ((slack-username))
+        icon_url: ((slack-icon-url))
     on_failure:
-      do:
-      - task: notify
-        file: prometheus-config/ci/notify.yml
-        params:
-          ALERT_MESSAGE: Prometheus seems to be down or hung!
-          ALERT_SOURCE: Concourse prometheus-down-check-production
-          ALERT_SEVERITY: critical
-          ALERT_COMPONENT: Prometheus
-      - put: notify-cloud-gov
-        params:
-          subject: email/subject.txt
-          body: email/body.txt
-  on_success:
-    put: slack
-    params:
-      <<: *slack-success-params
-      text: |
-        :white_check_mark: Check for whether Prometheus is up in production succeeded
-        <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
-  on_failure:
-    put: slack
-    params:
-      <<: *slack-failure-params
-      text: |
-        :x: Check for whether Prometheus is up in production FAILED
-        <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
+      put: slack
+      params: &slack-failure-params
+        text: |
+          :x: FAILED to check whether EC2 instances are shipping logs to CloudWatch
+          <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
+        channel: ((slack-channel-failure))
+        username: ((slack-username))
+        icon_url: ((slack-icon-url))
 
-- name: prometheus-down-check-staging
-  serial_groups: [staging]
-  plan:
-  - in_parallel:
-    - get: prometheus-check-timer
-      trigger: true
-    - get: prometheus-config
-      passed: [set-self]
-  - task: prometheus-down
-    file: prometheus-config/ci/prometheus-down.yml
-    params:
-      PROMETHEUSHOST: prometheus-staging.service.cf.internal
-      ALERTMANAGERHOST: alertmanager-staging.service.cf.internal
+  - name: aws-rds-storage-check
+    serial_groups: [production]
+    plan:
+      - in_parallel:
+          - get: prometheus-check-timer
+            trigger: true
+          - get: prometheus-config
+            passed: [set-self]
+          - get: general-task
+      - task: aws-rds-storage-check
+        image: general-task
+        file: prometheus-config/ci/aws-rds-storage.yml
+        params:
+          AWS_DEFAULT_REGION: ((aws-region))
+          AWS_ACCESS_KEY_ID: ((aws-rds-access-key-id))
+          AWS_SECRET_ACCESS_KEY: ((aws-rds-secret-access-key))
+          GATEWAY_HOST: http://prometheus-production.service.cf.internal
+    on_success:
+      put: slack
+      params:
+        <<: *slack-success-params
+        text: |
+          :white_check_mark: Successfully checked remaining storage on AWS RDS instances
+          <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
     on_failure:
-      do:
-      - task: notify
-        file: prometheus-config/ci/notify.yml
-        params:
-          ALERT_MESSAGE: Staging Prometheus seems to be down or hung!
-          ALERT_SOURCE: Concourse prometheus-down-check-staging
-          ALERT_SEVERITY: warning
-          ALERT_COMPONENT: Prometheus
-      - put: notify-cloud-gov
-        params:
-          subject: email/subject.txt
-          body: email/body.txt
-  on_success:
-    put: slack
-    params:
-      <<: *slack-success-params
-      text: |
-        :white_check_mark: Check for whether Prometheus is up in staging succeeded
-        <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
-  on_failure:
-    put: slack
-    params:
-      <<: *slack-failure-params
-      text: |
-        :x: Check for whether Prometheus is up in staging FAILED
-        <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
+      put: slack
+      params:
+        <<: *slack-failure-params
+        text: |
+          :x: FAILED to check remaining storage on AWS RDS instances
+          <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
 
-- name: deploy-prometheus-staging
-  serial: true
-  plan:
-  - in_parallel:
-    - get: master-bosh-root-cert
-    - get: prometheus-config
-      passed: [set-self]
-      trigger: true
-    - get: common-staging
-      trigger: true
-    - get: prometheus-release
-      trigger: true
-    - get: prometheus-release-src
-      trigger: true
-    - get: oauth2-proxy-release
-      trigger: true
-    - get: prometheus-stemcell-jammy
-      trigger: true
-    - get: secureproxy-release
-      trigger: true
-    - get: pipeline-tasks
-    - get: terraform-staging-yml
-  - put: prometheus-staging-deployment
-    params: &deploy-params
-      cert: master-bosh-root-cert/master-bosh.crt
-      manifest: prometheus-config/bosh/manifest.yml
-      releases:
-      - prometheus-release/*.tgz
-      - oauth2-proxy-release/*.tgz
-      - secureproxy-release/*.tgz
-      stemcells:
-      - prometheus-stemcell-jammy/*.tgz
-      ops_files:
-      - prometheus-config/bosh/opsfiles/rules.yml
-      - prometheus-config/bosh/opsfiles/staging.yml
-      vars_files:
-      - prometheus-config/bosh/varsfiles/staging.yml
-      - common-staging/staging-prometheus.yml
-      - terraform-staging-yml/state.yml
-  on_success:
-    put: slack
-    params:
-      <<: *slack-success-params
-      text: |
-        :white_check_mark: Successfully deployed prometheus on staging
-        <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
-  on_failure:
-    put: slack
-    params:
-      <<: *slack-failure-params
-      text: |
-        :x: FAILED to deploy prometheus on staging
-        <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
+  - name: aws-iam-check-keys
+    serial_groups: [production]
+    plan:
+      - in_parallel:
+          - get: iam-keys-check-timer
+            trigger: true
+          - get: prometheus-config
+            passed: [set-self]
+          - get: aws-admin
+            trigger: false
+          - get: terraform-yaml-production
+            trigger: false
+          - get: terraform-prod-com-yml
+            resource: terraform-prod-com-yml
+            trigger: false
+          - get: terraform-prod-gov-yml
+            resource: terraform-prod-gov-yml
+            trigger: false
+          - get: other-iam-users-yml
+            resource: other-iam-users-yml
+            trigger: false
+          - get: general-task
+      - task: aws-iam-check-keys
+        image: general-task
+        file: prometheus-config/ci/aws-iam-check-keys.yml
+        tags: [iaas]
+        params:
+          AWS_DEFAULT_REGION: ((aws-region))
+          IAM_KEYS_DB: ((aws-iam-keys-db))
+          IAM_KEYS_USER: ((aws-iam-keys-user))
+          IAM_KEYS_PASSWORD: ((aws-iam-keys-password))
+          IAM_KEYS_HOST: ((aws-iam-keys-host))
+          IAM_KEYS_PORT: ((aws-iam-keys-port))
+          IAM_CREATE_TABLES: ((aws-iam-create-tables-bool))
+          GATEWAY_HOST: prometheus-staging.service.cf.internal
+          PREFIX_DELIMITER: ((aws-iam-prefix-delimiter))
+          WARN_DAYS: ((aws-iam-warn-days))
+          VIOLATION_DAYS: ((aws-iam-violation-days))
+    on_success:
+      put: slack
+      params:
+        <<: *slack-success-params
+        text: |
+          :white_check_mark: Successfully ran IAM Check Keys in production
+          <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
+    on_failure:
+      put: slack
+      params:
+        <<: *slack-failure-params
+        text: |
+          :x: FAILED to deploy IAM Check Keys on production
+          <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
 
-- name: deploy-prometheus-production
-  serial: true
-  serial_groups: [production]
-  plan:
-  - in_parallel:
-    - get: master-bosh-root-cert
-    - get: prometheus-config
-      passed: [deploy-prometheus-staging]
-      trigger: true
-    - get: common-production
-      trigger: true
-    - get: prometheus-release
-      passed: [deploy-prometheus-staging]
-      trigger: true
-    - get: oauth2-proxy-release
-      passed: [deploy-prometheus-staging]
-      trigger: true
-    - get: prometheus-stemcell-jammy
-      passed: [deploy-prometheus-staging]
-      trigger: true
-    - get: secureproxy-release
-      passed: [deploy-prometheus-staging]
-      trigger: true
-    - get: pipeline-tasks
-    - get: terraform-prod-yml
-  - put: prometheus-production-deployment
-    params:
-      <<: *deploy-params
-      ops_files:
-      - prometheus-config/bosh/opsfiles/rules.yml
-      - prometheus-config/bosh/opsfiles/production.yml
-      vars_files:
-      - prometheus-config/bosh/varsfiles/production.yml
-      - common-production/production-prometheus.yml
-      - terraform-prod-yml/state.yml
-  on_success:
-    put: slack
-    params:
-      <<: *slack-success-params
-      text: |
-        :white_check_mark: Successfully deployed prometheus on production
-        <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
-  on_failure:
-    put: slack
-    params:
-      <<: *slack-failure-params
-      text: |
-        :x: FAILED to deploy prometheus on production
-        <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
+  - name: aws-mfa-check
+    serial_groups: [production]
+    plan:
+      - in_parallel:
+          - get: prometheus-check-timer
+            trigger: true
+          - get: prometheus-config
+            passed: [set-self]
+          - get: general-task
+      - task: aws-mfa
+        image: general-task
+        file: prometheus-config/ci/aws-mfa.yml
+        tags: [iaas]
+        params:
+          AWS_DEFAULT_REGION: ((aws-region))
+          GATEWAY_HOST: prometheus-production.service.cf.internal
+          VIOLATION_DAYS: ((aws-iam-violation-days))
+    on_success:
+      put: slack
+      params:
+        <<: *slack-success-params
+        text: |
+          :white_check_mark: Successfully ran AWS MFA check
+          <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
+    on_failure:
+      put: slack
+      params:
+        <<: *slack-failure-params
+        text: |
+          :x: FAILED to run AWS MFA check
+          <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
+
+  - name: cdn-broker-certs
+    serial_groups: [production]
+    plan:
+      - in_parallel:
+          - get: prometheus-check-timer
+            trigger: true
+          - get: prometheus-config
+            passed: [set-self]
+          - get: general-task
+      - in_parallel:
+          - task: cdn-broker-certs-production
+            image: general-task
+            file: prometheus-config/ci/cdn-broker-certs.yml
+            params:
+              AWS_DEFAULT_REGION: ((aws-external-region))
+              AWS_ACCESS_KEY_ID: ((aws-external-access-key-id))
+              AWS_SECRET_ACCESS_KEY: ((aws-external-secret-access-key))
+              ENVIRONMENT: production
+              GATEWAY_HOST: prometheus-production.service.cf.internal
+    on_success:
+      put: slack
+      params:
+        <<: *slack-success-params
+        text: |
+          :white_check_mark: Successfully updated Prometheus with metrics for CDN broker certificates
+          <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
+    on_failure:
+      put: slack
+      params:
+        <<: *slack-failure-params
+        text: |
+          :x: FAILED to update Prometheus with metrics for CDN broker certificates
+          <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
+
+  - name: domain-broker-certs
+    serial_groups: [production]
+    plan:
+      - in_parallel:
+          - get: prometheus-check-timer
+            trigger: true
+          - get: prometheus-config
+            passed: [set-self]
+          - get: general-task
+      - in_parallel:
+          - task: domain-broker-certs-development
+            image: general-task
+            file: prometheus-config/ci/domain-broker-certs.yml
+            tags: [iaas]
+            params:
+              PREFIX: development-domains
+              ENVIRONMENT: development
+              GATEWAY_HOST: prometheus-production.service.cf.internal
+              AWS_DEFAULT_REGION: ((aws-region))
+          - task: domain-broker-certs-staging
+            image: general-task
+            file: prometheus-config/ci/domain-broker-certs.yml
+            tags: [iaas]
+            params:
+              PREFIX: staging-domains
+              ENVIRONMENT: staging
+              GATEWAY_HOST: prometheus-production.service.cf.internal
+              AWS_DEFAULT_REGION: ((aws-region))
+          - task: domain-broker-certs-production
+            image: general-task
+            file: prometheus-config/ci/domain-broker-certs.yml
+            tags: [iaas]
+            params:
+              PREFIX: production-domains
+              ENVIRONMENT: production
+              GATEWAY_HOST: prometheus-production.service.cf.internal
+              AWS_DEFAULT_REGION: ((aws-region))
+    on_success:
+      put: slack
+      params:
+        <<: *slack-success-params
+        text: |
+          :white_check_mark: Successfully updated Prometheus with metrics for domain-broker certificates
+          <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
+    on_failure:
+      put: slack
+      params:
+        <<: *slack-failure-params
+        text: |
+          :x: FAILED to update Prometheus with metrics for domain-broker certificates
+          <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
+
+  - name: concourse-has-auth-check
+    serial_groups: [production]
+    plan:
+      - in_parallel:
+          - get: prometheus-check-timer
+            trigger: true
+          - get: prometheus-config
+            passed: [set-self]
+          - get: general-task
+      - task: concourse-has-auth
+        image: general-task
+        file: prometheus-config/ci/concourse-has-auth.yml
+        params:
+          CONCOURSE_URIS: "https://ci.fr-stage.cloud.gov https://ci.fr.cloud.gov"
+          GATEWAY_HOST: prometheus-production.service.cf.internal
+    on_success:
+      put: slack
+      params:
+        <<: *slack-success-params
+        text: |
+          :white_check_mark: Successfully updated Prometheus with metrics about Concourse auth
+          <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
+    on_failure:
+      put: slack
+      params:
+        <<: *slack-failure-params
+        text: |
+          :x: FAILED to update Prometheus with metrics about Concourse auth
+          <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
+
+  - name: prometheus-down-check-production
+    serial_groups: [production]
+    plan:
+      - in_parallel:
+          - get: prometheus-check-timer
+            trigger: true
+          - get: prometheus-config
+            passed: [set-self]
+          - get: general-task
+      - task: prometheus-down
+        image: general-task
+        file: prometheus-config/ci/prometheus-down.yml
+        params:
+          PROMETHEUSHOST: prometheus-production.service.cf.internal
+          ALERTMANAGERHOST: alertmanager-production.service.cf.internal
+        on_failure:
+          do:
+            - task: notify
+              image: general-task
+              file: prometheus-config/ci/notify.yml
+              params:
+                ALERT_MESSAGE: Prometheus seems to be down or hung!
+                ALERT_SOURCE: Concourse prometheus-down-check-production
+                ALERT_SEVERITY: critical
+                ALERT_COMPONENT: Prometheus
+            - put: notify-cloud-gov
+              params:
+                subject: email/subject.txt
+                body: email/body.txt
+    on_success:
+      put: slack
+      params:
+        <<: *slack-success-params
+        text: |
+          :white_check_mark: Check for whether Prometheus is up in production succeeded
+          <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
+    on_failure:
+      put: slack
+      params:
+        <<: *slack-failure-params
+        text: |
+          :x: Check for whether Prometheus is up in production FAILED
+          <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
+
+  - name: prometheus-down-check-staging
+    serial_groups: [staging]
+    plan:
+      - in_parallel:
+          - get: prometheus-check-timer
+            trigger: true
+          - get: prometheus-config
+            passed: [set-self]
+          - get: general-task
+      - task: prometheus-down
+        image: general-task
+        file: prometheus-config/ci/prometheus-down.yml
+        params:
+          PROMETHEUSHOST: prometheus-staging.service.cf.internal
+          ALERTMANAGERHOST: alertmanager-staging.service.cf.internal
+        on_failure:
+          do:
+            - task: notify
+              image: general-task
+              file: prometheus-config/ci/notify.yml
+              params:
+                ALERT_MESSAGE: Staging Prometheus seems to be down or hung!
+                ALERT_SOURCE: Concourse prometheus-down-check-staging
+                ALERT_SEVERITY: warning
+                ALERT_COMPONENT: Prometheus
+            - put: notify-cloud-gov
+              params:
+                subject: email/subject.txt
+                body: email/body.txt
+    on_success:
+      put: slack
+      params:
+        <<: *slack-success-params
+        text: |
+          :white_check_mark: Check for whether Prometheus is up in staging succeeded
+          <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
+    on_failure:
+      put: slack
+      params:
+        <<: *slack-failure-params
+        text: |
+          :x: Check for whether Prometheus is up in staging FAILED
+          <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
+
+  - name: deploy-prometheus-staging
+    serial: true
+    plan:
+      - in_parallel:
+          - get: master-bosh-root-cert
+          - get: prometheus-config
+            passed: [set-self]
+            trigger: true
+          - get: common-staging
+            trigger: true
+          - get: prometheus-release
+            trigger: true
+          - get: prometheus-release-src
+            trigger: true
+          - get: oauth2-proxy-release
+            trigger: true
+          - get: prometheus-stemcell-jammy
+            trigger: true
+          - get: secureproxy-release
+            trigger: true
+          - get: pipeline-tasks
+          - get: terraform-staging-yml
+      - put: prometheus-staging-deployment
+        params: &deploy-params
+          cert: master-bosh-root-cert/master-bosh.crt
+          manifest: prometheus-config/bosh/manifest.yml
+          releases:
+            - prometheus-release/*.tgz
+            - oauth2-proxy-release/*.tgz
+            - secureproxy-release/*.tgz
+          stemcells:
+            - prometheus-stemcell-jammy/*.tgz
+          ops_files:
+            - prometheus-config/bosh/opsfiles/rules.yml
+            - prometheus-config/bosh/opsfiles/staging.yml
+          vars_files:
+            - prometheus-config/bosh/varsfiles/staging.yml
+            - common-staging/staging-prometheus.yml
+            - terraform-staging-yml/state.yml
+    on_success:
+      put: slack
+      params:
+        <<: *slack-success-params
+        text: |
+          :white_check_mark: Successfully deployed prometheus on staging
+          <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
+    on_failure:
+      put: slack
+      params:
+        <<: *slack-failure-params
+        text: |
+          :x: FAILED to deploy prometheus on staging
+          <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
+
+  - name: deploy-prometheus-production
+    serial: true
+    serial_groups: [production]
+    plan:
+      - in_parallel:
+          - get: master-bosh-root-cert
+          - get: prometheus-config
+            passed: [deploy-prometheus-staging]
+            trigger: true
+          - get: common-production
+            trigger: true
+          - get: prometheus-release
+            passed: [deploy-prometheus-staging]
+            trigger: true
+          - get: oauth2-proxy-release
+            passed: [deploy-prometheus-staging]
+            trigger: true
+          - get: prometheus-stemcell-jammy
+            passed: [deploy-prometheus-staging]
+            trigger: true
+          - get: secureproxy-release
+            passed: [deploy-prometheus-staging]
+            trigger: true
+          - get: pipeline-tasks
+          - get: terraform-prod-yml
+      - put: prometheus-production-deployment
+        params:
+          <<: *deploy-params
+          ops_files:
+            - prometheus-config/bosh/opsfiles/rules.yml
+            - prometheus-config/bosh/opsfiles/production.yml
+          vars_files:
+            - prometheus-config/bosh/varsfiles/production.yml
+            - common-production/production-prometheus.yml
+            - terraform-prod-yml/state.yml
+    on_success:
+      put: slack
+      params:
+        <<: *slack-success-params
+        text: |
+          :white_check_mark: Successfully deployed prometheus on production
+          <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
+    on_failure:
+      put: slack
+      params:
+        <<: *slack-failure-params
+        text: |
+          :x: FAILED to deploy prometheus on production
+          <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
 
 resources:
-- name: master-bosh-root-cert
-  type: s3-iam
-  source:
-    bucket: ((prometheus-production-private-bucket))
-    region_name: ((aws-region))
-    versioned_file: master-bosh.crt
+  - name: master-bosh-root-cert
+    type: s3-iam
+    source:
+      bucket: ((prometheus-production-private-bucket))
+      region_name: ((aws-region))
+      versioned_file: master-bosh.crt
 
-- name: common-staging
-  type: s3-iam
-  source:
-    region_name: ((prometheus-staging-private-region))
-    bucket: ((prometheus-staging-private-bucket))
-    versioned_file: staging-prometheus.yml
+  - name: common-staging
+    type: s3-iam
+    source:
+      region_name: ((prometheus-staging-private-region))
+      bucket: ((prometheus-staging-private-bucket))
+      versioned_file: staging-prometheus.yml
 
-- name: common-production
-  type: s3-iam
-  source:
-    region_name: ((prometheus-production-private-region))
-    bucket: ((prometheus-production-private-bucket))
-    versioned_file: production-prometheus.yml
+  - name: common-production
+    type: s3-iam
+    source:
+      region_name: ((prometheus-production-private-region))
+      bucket: ((prometheus-production-private-bucket))
+      versioned_file: production-prometheus.yml
 
-- name: prometheus-release
-  type: github-release-alt
-  source:
-    owner: bosh-prometheus
-    repository: prometheus-boshrelease
-    access_token: ((github-access-token))
-    # we can't upgrade past this until k8s is upgraded.
-    tag_filter: ((prometheus-release-version-filter))
+  - name: prometheus-release
+    type: github-release-alt
+    source:
+      owner: bosh-prometheus
+      repository: prometheus-boshrelease
+      access_token: ((github-access-token))
+      # we can't upgrade past this until k8s is upgraded.
+      tag_filter: ((prometheus-release-version-filter))
 
-- name: oauth2-proxy-release
-  type: s3-iam
-  source:
-    bucket: ((s3-bosh-releases-bucket))
-    regexp: oauth2-proxy-(.*).tgz
-    region_name: ((aws-region))
+  - name: oauth2-proxy-release
+    type: s3-iam
+    source:
+      bucket: ((s3-bosh-releases-bucket))
+      regexp: oauth2-proxy-(.*).tgz
+      region_name: ((aws-region))
 
-- name: secureproxy-release
-  source:
-    bucket: ((s3-bosh-releases-bucket))
-    regexp: secureproxy-(.*).tgz
-    region_name: ((aws-region))
-  type: s3-iam
+  - name: secureproxy-release
+    source:
+      bucket: ((s3-bosh-releases-bucket))
+      regexp: secureproxy-(.*).tgz
+      region_name: ((aws-region))
+    type: s3-iam
 
-- name: prometheus-config
-  icon: github-circle
-  type: git
-  source:
-    uri: ((cg-deploy-prometheus-git-url))
-    branch: ((cg-deploy-prometheus-git-branch))
-    commit_verification_keys: ((cloud-gov-pgp-keys))
+  - name: prometheus-config
+    icon: github-circle
+    type: git
+    source:
+      uri: ((cg-deploy-prometheus-git-url))
+      branch: ((cg-deploy-prometheus-git-branch))
+      commit_verification_keys: ((cloud-gov-pgp-keys))
 
-- name: prometheus-release-src
-  icon: github-circle
-  type: git
-  source:
-    uri: ((prometheus-release-git-url))
-    branch: ((prometheus-release-git-branch))
-    # we can't upgrade past this until k8s is upgraded.
-    tag_filter: ((prometheus-release-version-filter))
+  - name: prometheus-release-src
+    icon: github-circle
+    type: git
+    source:
+      uri: ((prometheus-release-git-url))
+      branch: ((prometheus-release-git-branch))
+      # we can't upgrade past this until k8s is upgraded.
+      tag_filter: ((prometheus-release-version-filter))
 
-- name: prometheus-stemcell-jammy
-  type: bosh-io-stemcell
-  source:
-    name: bosh-aws-xen-hvm-ubuntu-jammy-go_agent
+  - name: prometheus-stemcell-jammy
+    type: bosh-io-stemcell
+    source:
+      name: bosh-aws-xen-hvm-ubuntu-jammy-go_agent
 
+  - name: prometheus-staging-deployment
+    type: bosh-deployment
+    source:
+      target: ((prometheus-staging-deployment-bosh-target))
+      client: ci
+      client_secret: ((tooling_bosh_uaa_ci_client_secret))
+      ca_cert: ((common_ca_cert))
+      deployment: prometheus-staging
 
-- name: prometheus-staging-deployment
-  type: bosh-deployment
-  source:
-    target: ((prometheus-staging-deployment-bosh-target))
-    client: ci
-    client_secret: ((tooling_bosh_uaa_ci_client_secret))
-    ca_cert: ((common_ca_cert))
-    deployment: prometheus-staging
+  - name: prometheus-production-deployment
+    type: bosh-deployment
+    source:
+      target: ((prometheus-production-deployment-bosh-target))
+      client: ci
+      client_secret: ((tooling_bosh_uaa_ci_client_secret))
+      ca_cert: ((common_ca_cert))
+      deployment: prometheus-production
 
-- name: prometheus-production-deployment
-  type: bosh-deployment
-  source:
-    target: ((prometheus-production-deployment-bosh-target))
-    client: ci
-    client_secret: ((tooling_bosh_uaa_ci_client_secret))
-    ca_cert: ((common_ca_cert))
-    deployment: prometheus-production
+  - name: pipeline-tasks
+    type: git
+    source:
+      uri: ((pipeline-tasks-git-url))
+      branch: ((pipeline-tasks-git-branch))
+      commit_verification_keys: ((cloud-gov-pgp-keys))
 
-- name: pipeline-tasks
-  type: git
-  source:
-    uri: ((pipeline-tasks-git-url))
-    branch: ((pipeline-tasks-git-branch))
-    commit_verification_keys: ((cloud-gov-pgp-keys))
+  - name: slack
+    type: slack-notification
+    source:
+      url: ((slack-webhook-url))
 
-- name: slack
-  type: slack-notification
-  source:
-    url: ((slack-webhook-url))
+  - name: prometheus-check-timer
+    type: time
+    source:
+      interval: 30m
 
-- name: prometheus-check-timer
-  type: time
-  source:
-    interval: 30m
+  - name: aws-admin
+    source:
+      branch: main
+      commit_verification_keys: ((cloud-gov-pgp-keys))
+      private_key: ((cg-ci-bot-sshkey.private_key))
+      uri: git@github.com:cloud-gov/aws-admin.git
+    type: git
 
-- name: aws-admin
-  source:
-    branch: main
-    commit_verification_keys: ((cloud-gov-pgp-keys))
-    private_key: ((cg-ci-bot-sshkey.private_key))
-    uri: git@github.com:cloud-gov/aws-admin.git
-  type: git
+  - name: terraform-yaml-production
+    type: s3-iam
+    source:
+      bucket: ((tf-state-bucket))
+      versioned_file: ((tf-state-file-production))
+      region_name: ((aws-region))
 
-- name: terraform-yaml-production
-  type: s3-iam
-  source:
-    bucket: ((tf-state-bucket))
-    versioned_file: ((tf-state-file-production))
-    region_name: ((aws-region))
+  - name: iam-keys-check-timer
+    type: time
+    source:
+      days: [Tuesday]
+      start: 8:00 PM
+      stop: 9:00 PM
+      location: America/New_York
 
-- name: iam-keys-check-timer
-  type: time
-  source:
-    days: [Tuesday]
-    start: 8:00 PM
-    stop: 9:00 PM
-    location: America/New_York
+  - name: notify-cloud-gov
+    type: email
+    source:
+      smtp:
+        host: ((smtp-host-name))
+        port: ((smtp-port-number))
+        username: ((smtp-username))
+        password: ((smtp-password))
+        ca_cert: ((smtp-certificate))
+      from: no-reply@gsa.gov
+      to:
+        - "cloud-gov-notifications@gsa.gov"
 
-- name: notify-cloud-gov
-  type: email
-  source:
-    smtp:
-      host: ((smtp-host-name))
-      port: ((smtp-port-number))
-      username: ((smtp-username))
-      password: ((smtp-password))
-      ca_cert: ((smtp-certificate))
-    from: no-reply@gsa.gov
-    to:
-      - "cloud-gov-notifications@gsa.gov"
+  - name: terraform-staging-yml
+    type: s3-iam
+    source:
+      region_name: ((prometheus-staging-private-region))
+      bucket: terraform-state
+      versioned_file: tooling/state.yml
 
-- name: terraform-staging-yml
-  type: s3-iam
-  source:
-    region_name: ((prometheus-staging-private-region))
-    bucket: terraform-state
-    versioned_file: tooling/state.yml
+  - name: terraform-prod-yml
+    type: s3-iam
+    source:
+      region_name: ((prometheus-production-private-region))
+      bucket: terraform-state
+      versioned_file: tooling/state.yml
 
-- name: terraform-prod-yml
-  type: s3-iam
-  source:
-    region_name: ((prometheus-production-private-region))
-    bucket: terraform-state
-    versioned_file: tooling/state.yml
+  - name: terraform-prod-com-yml
+    type: s3-iam
+    source:
+      region_name: ((prometheus-production-private-region))
+      bucket: terraform-state
+      versioned_file: aws-admin/com/state.yml
 
-- name: terraform-prod-com-yml
-  type: s3-iam
-  source:
-    region_name: ((prometheus-production-private-region))
-    bucket: terraform-state
-    versioned_file: aws-admin/com/state.yml
+  - name: terraform-prod-gov-yml
+    type: s3-iam
+    source:
+      region_name: ((prometheus-production-private-region))
+      bucket: terraform-state
+      versioned_file: aws-admin/gov/state.yml
 
-- name: terraform-prod-gov-yml
-  type: s3-iam
-  source:
-    region_name: ((prometheus-production-private-region))
-    bucket: terraform-state
-    versioned_file: aws-admin/gov/state.yml
+  - name: other-iam-users-yml
+    type: s3-iam
+    source:
+      region_name: ((prometheus-production-private-region))
+      bucket: cloud-gov-varz
+      versioned_file: other_iam_users.yml
 
-- name: other-iam-users-yml
-  type: s3-iam
-  source:
-    region_name: ((prometheus-production-private-region))
-    bucket: cloud-gov-varz
-    versioned_file: other_iam_users.yml
+  - name: general-task
+    type: registry-image
+    source:
+      aws_access_key_id: ((ecr_aws_key))
+      aws_secret_access_key: ((ecr_aws_secret))
+      repository: general-task
+      aws_region: us-gov-west-1
+      tag: latest
 
 resource_types:
-- name: slack-notification
-  type: docker-image
-  source:
-    repository: cfcommunity/slack-notification-resource
+  - name: registry-image
+    type: registry-image
+    source:
+      aws_access_key_id: ((ecr_aws_key))
+      aws_secret_access_key: ((ecr_aws_secret))
+      repository: registry-image-resource
+      aws_region: us-gov-west-1
+      tag: latest
 
-- name: bosh-deployment
-  type: docker-image
-  source:
-    repository: cloudfoundry/bosh-deployment-resource
+  - name: slack-notification
+    type: registry-image
+    source:
+      aws_access_key_id: ((ecr_aws_key))
+      aws_secret_access_key: ((ecr_aws_secret))
+      repository: slack-notification-resource
+      aws_region: us-gov-west-1
+      tag: latest
 
-- name: s3-iam
-  type: docker-image
-  source:
-    repository: 18fgsa/s3-resource
+  - name: bosh-deployment
+    type: registry-image
+    source:
+      aws_access_key_id: ((ecr_aws_key))
+      aws_secret_access_key: ((ecr_aws_secret))
+      repository: bosh-deployment-resource
+      aws_region: us-gov-west-1
+      tag: latest
 
-- name: email
-  type: docker-image
-  source:
-    repository: pcfseceng/email-resource
+  - name: s3-iam
+    type: registry-image
+    source:
+      aws_access_key_id: ((ecr_aws_key))
+      aws_secret_access_key: ((ecr_aws_secret))
+      repository: s3-resource
+      aws_region: us-gov-west-1
+      tag: latest
 
-- name: github-release-alt
-  type: registry-image
-  source:
-    repository: concourse/github-release-resource
+  - name: email
+    type: registry-image
+    source:
+      aws_access_key_id: ((ecr_aws_key))
+      aws_secret_access_key: ((ecr_aws_secret))
+      repository: email-resource
+      aws_region: us-gov-west-1
+      tag: latest
+
+  - name: github-release-alt
+    type: registry-image
+    source:
+      aws_access_key_id: ((ecr_aws_key))
+      aws_secret_access_key: ((ecr_aws_secret))
+      repository: github-release-resource
+      aws_region: us-gov-west-1
+      tag: latest
+
+  - name: time
+    type: registry-image
+    source:
+      aws_access_key_id: ((ecr_aws_key))
+      aws_secret_access_key: ((ecr_aws_secret))
+      repository: time-resource
+      aws_region: us-gov-west-1
+      tag: latest
+
+  - name: git
+    type: registry-image
+    source:
+      aws_access_key_id: ((ecr_aws_key))
+      aws_secret_access_key: ((ecr_aws_secret))
+      repository: git-resource
+      aws_region: us-gov-west-1
+      tag: latest
+
+  - name: bosh-io-stemcell
+    type: registry-image
+    source:
+      aws_access_key_id: ((ecr_aws_key))
+      aws_secret_access_key: ((ecr_aws_secret))
+      repository: bosh-io-stemcell-resource
+      aws_region: us-gov-west-1
+      tag: latest
+
