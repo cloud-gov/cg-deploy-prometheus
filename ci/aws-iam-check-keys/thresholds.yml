@@ -1,20 +1,16 @@
 - account_type: "Operator"
-  is_wildcard: False
   warn: 75
   violation: 90
   alert: True
 - account_type: "Platform"
-  is_wildcard: False
   warn: 80
   violation: 165
   alert: True
 - account_type: "Application"
-  is_wildcard: False
   warn: 80
   violation: 165
   alert: True
 - account_type: "Customer"
-  is_wildcard: True
   warn: 0
   violation: 0
   alert: False

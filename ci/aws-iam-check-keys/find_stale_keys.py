@@ -249,6 +249,7 @@ def search_for_keys(region_name: str, profile: dict, all_users: list[Threshold])
     # into a dictionary to use for the credentials check
     csv_reader = csv.DictReader(content_lines, delimiter=",")
     not_found = []
+    row: dict
     for row in csv_reader:
         user_name = row['user']
 
