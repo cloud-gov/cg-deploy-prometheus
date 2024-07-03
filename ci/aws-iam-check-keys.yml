@@ -1,13 +1,5 @@
 ---
 platform: linux
-image_resource:
-  type: registry-image
-  source:
-    aws_access_key_id: ((ecr_aws_key))
-    aws_secret_access_key: ((ecr_aws_secret))
-    repository: harden-concourse-task
-    aws_region: us-gov-west-1
-    tag: ((stale-keys-image-tag))
 
 inputs:
 - name: prometheus-config
@@ -22,11 +14,11 @@ run:
   args:
   - -c
   - |
-    pip install pipenv
     cd prometheus-config/ci/aws-iam-check-keys
-    pipenv install
-    pipenv run python3 find_stale_keys.py
-
+    # note: this installs into system python. This is ok in an ephemeral container
+    # but do not copy this locally!
+    python3 -m pip install -r requirements.txt
+    python3 find_stale_keys.py
 params:
   AWS_DEFAULT_REGION:
   AWS_ACCESS_KEY_ID:
