@@ -158,10 +158,10 @@ def check_retention_for_key(access_key_last_rotated: str, access_key_num: int, a
     alert_dict: dict[str, Any] = dataclasses.asdict(alert)
 
     if alert.alert_type != OK:
-        # print(f'adding uncleared alert: {alert_dict}')
+        print(f'adding uncleared alert: {alert_dict}')
         uncleared_alerts.append(alert_dict)
     else:
-        # print(f'adding cleared alert: {alert_dict}')
+        print(f'adding cleared alert: {alert_dict}')
         cleared_alerts.append(alert_dict)
 
 
@@ -257,7 +257,7 @@ def search_for_keys(region_name: str, profile: dict, all_users: list[Threshold])
         # When we want to do something with unknown users we can hook it up here
         aws_user = find_known_user(user_name, all_users)
         if not aws_user:
-            print(f"about to add {user_name} to not_found list")
+            # print(f"about to add {user_name} to not_found list")
             not_found.append(user_name)
         else:
             check_user_thresholds(aws_user, row)
