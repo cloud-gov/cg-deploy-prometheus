@@ -130,7 +130,7 @@ jobs:
       IAM_KEYS_HOST: ((aws-iam-keys-host))
       IAM_KEYS_PORT: ((aws-iam-keys-port))
       IAM_CREATE_TABLES: ((aws-iam-create-tables-bool))
-      GATEWAY_HOST: prometheus-production.service.cf.internal
+      GATEWAY_HOST: prometheus-staging.service.cf.internal
       PREFIX_DELIMITER: ((aws-iam-prefix-delimiter))
       WARN_DAYS: ((aws-iam-warn-days))
       VIOLATION_DAYS: ((aws-iam-violation-days))

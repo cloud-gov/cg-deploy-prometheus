@@ -1,5 +1,7 @@
 boto3
+dataclasses
+environs
 requests
-psycopg2-binary
-peewee
+python-dateutil
 PyYAML
+prometheus-client
